@@ -1,18 +1,395 @@
-<!DOCTYPE html>
+<!-- templates/now_playing_full_bleed.html -->
+<!doctype html>
 <html lang="en">
+
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Music Tracker</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Now Playing</title>
+    <style>
+        :root {
+            --bg: #0b0f14;
+            --muted: #8aa0b8;
+            --text: #e8f0fb;
+            --border: rgba(255, 255, 255, .10);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            height: 100%;
+        }
+
+        body {
+            margin: 0;
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+            background:
+                radial-gradient(1200px 700px at 20% 10%, rgba(62, 130, 246, .22), transparent 60%),
+                radial-gradient(900px 600px at 80% 40%, rgba(164, 72, 255, .18), transparent 60%),
+                var(--bg);
+            color: var(--text);
+        }
+
+        /* Full-screen layout */
+        .screen {
+            height: 100vh;
+            width: 100vw;
+            display: grid;
+            grid-template-columns: 1fr 1.35fr;
+            gap: 0;
+            overflow: hidden;
+        }
+
+        /* Left: full-bleed art that fills its half */
+        .art {
+            position: relative;
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+            background: rgba(255, 255, 255, .06);
+        }
+
+        .art img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+            /* avoid drag ghosting on kiosk */
+            user-select: none;
+            -webkit-user-drag: none;
+        }
+
+        /* subtle gloss + vignette so text side feels connected */
+        .art::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            background:
+                radial-gradient(800px 500px at 35% 10%, rgba(255, 255, 255, .18), transparent 60%),
+                radial-gradient(1200px 900px at 60% 60%, rgba(0, 0, 0, .35), transparent 55%);
+            opacity: .55;
+            mix-blend-mode: screen;
+        }
+
+        /* Right: metadata pane that scales with viewport */
+        .meta {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: clamp(18px, 3.5vw, 56px);
+            gap: clamp(14px, 2.2vw, 28px);
+            min-width: 0;
+            background: linear-gradient(90deg, rgba(0, 0, 0, .15), rgba(0, 0, 0, .28));
+            border-left: 1px solid rgba(255, 255, 255, .06);
+        }
+
+        .track {
+            margin: 0;
+            font-weight: 900;
+            letter-spacing: -0.03em;
+            line-height: 1.02;
+            font-size: clamp(30px, 4.2vw, 88px);
+            word-break: break-word;
+        }
+
+        .info {
+            display: grid;
+            gap: clamp(10px, 1.6vw, 18px);
+            min-width: 0;
+        }
+
+        .row {
+            display: grid;
+            grid-template-columns: max-content 1fr;
+            gap: clamp(10px, 1.4vw, 16px);
+            align-items: baseline;
+            min-width: 0;
+        }
+
+        .label {
+            font-weight: 800;
+            color: rgba(232, 240, 251, .80);
+            text-transform: uppercase;
+            letter-spacing: .12em;
+            font-size: clamp(12px, 1.05vw, 16px);
+            white-space: nowrap;
+        }
+
+        .value {
+            color: var(--muted);
+            font-size: clamp(16px, 1.8vw, 28px);
+            line-height: 1.25;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* Small status area at bottom right */
+        .status {
+            margin-top: auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            padding-top: clamp(14px, 2vw, 22px);
+            border-top: 1px solid rgba(255, 255, 255, .08);
+        }
+
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 14px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            background: rgba(255, 255, 255, .04);
+            font-weight: 800;
+            letter-spacing: .02em;
+            text-transform: lowercase;
+            font-size: clamp(12px, 1.1vw, 16px);
+        }
+
+        .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #64748b;
+            box-shadow: 0 0 0 4px rgba(100, 116, 139, .18);
+        }
+
+        .state-playing .dot {
+            background: #22c55e;
+            box-shadow: 0 0 0 4px rgba(34, 197, 94, .18);
+        }
+
+        .state-paused .dot {
+            background: #f59e0b;
+            box-shadow: 0 0 0 4px rgba(245, 158, 11, .18);
+        }
+
+        .state-stopped .dot {
+            background: #ef4444;
+            box-shadow: 0 0 0 4px rgba(239, 68, 68, .18);
+        }
+
+        .state-listening .dot {
+            background: #22c55e;
+            box-shadow: 0 0 0 4px rgba(34, 197, 94, .18);
+        }
+
+        .state-idle .dot {
+            background: #64748b;
+            box-shadow: 0 0 0 4px rgba(100, 116, 139, .18);
+        }
+
+        .small {
+            color: rgba(232, 240, 251, .60);
+            font-variant-numeric: tabular-nums;
+            font-size: clamp(12px, 1.05vw, 14px);
+            white-space: nowrap;
+        }
+
+        .btn {
+            appearance: none;
+            border: 1px solid rgba(255, 255, 255, .12);
+            background: rgba(255, 255, 255, .04);
+            color: var(--text);
+            border-radius: 12px;
+            padding: 10px 12px;
+            font-weight: 800;
+            cursor: pointer;
+            font-size: clamp(12px, 1.1vw, 14px);
+        }
+
+        .btn:active {
+            transform: translateY(1px);
+        }
+
+        /* On narrow screens: stack with art on top */
+        @media (max-width: 760px) {
+            .screen {
+                grid-template-columns: 1fr;
+                grid-template-rows: 48vh 1fr;
+            }
+
+            .meta {
+                border-left: none;
+                border-top: 1px solid rgba(255, 255, 255, .06);
+            }
+
+            .row {
+                grid-template-columns: 1fr;
+            }
+
+            .label {
+                letter-spacing: .10em;
+            }
+
+            .value {
+                white-space: normal;
+            }
+        }
+    </style>
 </head>
+
 <body>
-    <div class="container">
-        <h1 class="title">Welcome to Music Tracker</h1>
-        <div class="options">
-            <a href="/tracks" class="option">View Tracks</a>
-            <a href="/albums" class="option">View Albums</a>
-        </div>
+    {% set fallback_art = "data:image/svg+xml;utf8," ~
+    "<svg xmlns='http://www.w3.org/2000/svg' width='900' height='900'>" ~
+        "<defs>
+            <linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>" ~
+                "
+                <stop offset='0' stop-color='%23101826' />" ~
+                "
+                <stop offset='1' stop-color='%230b0f14' />" ~
+                "
+            </linearGradient>
+        </defs>" ~
+        "
+        <rect width='100%25' height='100%25' fill='url(%23g)' />" ~
+        "
+        <circle cx='450' cy='450' r='260' fill='%231b2a40' />" ~
+        "
+        <circle cx='450' cy='450' r='86' fill='%230b0f14' />" ~
+        
+        "<text x='50%25' y='88%25' dominant-baseline='middle' text-anchor='middle' fill='%238aa0b8'
+            font-family='system-ui,Segoe UI,Roboto' font-size='34'>No artwork</text>" ~
+        "
+    </svg>"
+    %}
+
+    <div class="screen">
+        <section class="art" aria-label="Album artwork">
+            <img id="art" src="{{ data.art_url or fallback_art }}" alt="Album artwork" loading="eager" decoding="async">
+        </section>
+
+        <section class="meta" aria-label="Now playing metadata">
+            <h1 id="track" class="track">{{ data.track or "—" }}</h1>
+
+            <div class="info">
+                <div class="row">
+                    <span class="label">Artist</span>
+                    <span id="artist" class="value" title="{{ data.artist }}">{{ data.artist or "—" }}</span>
+                </div>
+                <div class="row">
+                    <span class="label">Album</span>
+                    <span id="album" class="value" title="{{ data.album }}">{{ data.album or "—" }}</span>
+                </div>
+            </div>
+
+            <div class="status">
+                <div id="statePill" class="pill state-idle">
+                    <span class="dot" aria-hidden="true"></span>
+                    <span id="stateText">idle</span>
+                </div>
+
+                <div class="small">
+                    Updated: <span id="updatedAt">server render</span>
+                </div>
+
+                <button class="btn" type="button" id="refreshBtn">Refresh</button>
+            </div>
+        </section>
     </div>
+
+    <script>
+        const API_URL = "/now-playing-data";
+        const RECOGNITION_STATE_URL = "http://localhost:5432/recognition-state";
+
+        const el = {
+            art: document.getElementById("art"),
+            track: document.getElementById("track"),
+            artist: document.getElementById("artist"),
+            album: document.getElementById("album"),
+            statePill: document.getElementById("statePill"),
+            stateText: document.getElementById("stateText"),
+            updatedAt: document.getElementById("updatedAt"),
+            refreshBtn: document.getElementById("refreshBtn"),
+        };
+
+        const FALLBACK_ART = {{ (data.art_url or fallback_art) | tojson }};
+
+        function setText(node, value) {
+            const t = (value && value.trim().length) ? value : "—";
+            node.textContent = t;
+            node.title = t;
+        }
+
+        function setState(state) {
+            const s = (state === "listening" || state === "idle") ? state : "idle";
+            el.stateText.textContent = s;
+            el.statePill.classList.remove("state-listening", "state-idle");
+            el.statePill.classList.add("state-" + s);
+        }
+
+        function setArt(url) {
+            const src = (url && url.trim().length) ? url : FALLBACK_ART;
+            if (el.art.getAttribute("src") !== src) el.art.setAttribute("src", src);
+        }
+
+        async function fetchNowPlaying() {
+            const res = await fetch(API_URL, { cache: "no-store" });
+            if (!res.ok) throw new Error("Bad response: " + res.status);
+            return await res.json();
+        }
+
+        async function fetchRecognitionState() {
+            const res = await fetch(RECOGNITION_STATE_URL, { cache: "no-store" });
+            if (!res.ok) throw new Error("Bad response: " + res.status);
+            return await res.json();
+        }
+
+        function applyData(d) {
+            setArt(d.art_url);
+            setText(el.track, d.track);
+            setText(el.artist, d.artist);
+            setText(el.album, d.album);
+            el.updatedAt.textContent = new Date().toLocaleTimeString();
+        }
+
+        async function refresh() {
+            try {
+                const data = await fetchNowPlaying();
+                applyData(data);
+            } catch (err) {
+                el.updatedAt.textContent = "offline";
+                console.warn(err);
+            }
+        }
+
+        async function updateRecognitionState() {
+            try {
+                const data = await fetchRecognitionState();
+                setState(data.state);
+            } catch (err) {
+                console.warn("Failed to fetch recognition state:", err);
+                setState("idle");
+            }
+        }
+
+        el.refreshBtn.addEventListener("click", refresh);
+
+        const REFRESH_MS = 1500;
+        const STATE_REFRESH_MS = 500; // Poll state more frequently
+        
+        setInterval(refresh, REFRESH_MS);
+        setInterval(updateRecognitionState, STATE_REFRESH_MS);
+
+        // Initial updates
+        updateRecognitionState();
+
+        document.addEventListener("visibilitychange", () => {
+            if (!document.hidden) {
+                refresh();
+                updateRecognitionState();
+            }
+        });
+    </script>
 </body>
+
 </html>

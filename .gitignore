@@ -4,17 +4,18 @@ kill.sh
 screensaver.lock
 test_*
 npsettings*
-
+music_data.db
 # below Created by https://www.toptal.com/developers/gitignore/api/python
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
+samples/
 
 # C extensions
 *.so
-
+recording.wav
 # mac OS
 .DS_Store
 
