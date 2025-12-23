@@ -72,4 +72,4 @@ if __name__ == "__main__":
     logger.info("Starting API...")
     Thread(target=start_api, daemon=True).start()
     webview.create_window("Now Playing", "http://localhost:5432/", fullscreen=False)
-    webview.start()
+    webview.start(gui="qt")
