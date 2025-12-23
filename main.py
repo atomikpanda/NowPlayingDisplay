@@ -85,7 +85,7 @@ async def main():
     def on_is_recording_changed(is_recording: bool) -> None:
         asyncio.create_task(set_is_music_detecting(is_recording))
 
-    mic = MicrophoneCapture(debug=False, chunk_size=2048, sample_rate=22050)
+    mic = MicrophoneCapture(debug=False, chunk_size=4096, sample_rate=44100)
     detector = MusicDetector(
         similarity_threshold=0.75,
         on_recording_complete=on_recording_complete,
