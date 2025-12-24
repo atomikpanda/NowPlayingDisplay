@@ -215,13 +215,13 @@ class MusicDetector:
         if self.debug and len(chunk) > 0:
             print(f"Processing chunk: {len(chunk)} bytes, sr={sr}")
 
-        y = np.frombuffer(chunk, dtype=np.float32)
+        # Convert int16 bytes to float32 properly
+        y = np.frombuffer(chunk, dtype=np.int16).astype(np.float32)
 
-        # Sanitize audio data
-        # Remove NaN and Inf values
-        y = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+        # Normalize int16 range [-32768, 32767] to float32 range [-1.0, 1.0]
+        y = y / 32768.0
 
-        # Clip to valid audio range
+        # Additional safety clipping
         y = np.clip(y, -1.0, 1.0)
 
         # Skip if audio is all zeros (silence)
