@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import hashlib
 import os
 import wave
 from typing import TYPE_CHECKING, Callable, Optional, Tuple
@@ -21,6 +22,7 @@ class AudioFingerprinter:
         self.similarity_threshold: float = similarity_threshold
         self.last_fingerprint: Optional[np.ndarray] = None
         self.last_fingerprint_time: Optional[datetime.datetime] = None
+        self._match_cache: dict[str, bool] = {}
 
     def create_fingerprint(self, y: np.ndarray, sr: int) -> np.ndarray:
         """Create a fingerprint from audio features (returns feature vector, not hash)"""
@@ -58,6 +60,24 @@ class AudioFingerprinter:
         """Calculate cosine similarity between two feature vectors"""
         return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8)
 
+    def _fingerprint_hash(self, fingerprint: np.ndarray) -> str:
+        """Stable hash for fingerprint arrays."""
+        return hashlib.sha1(
+            np.asarray(fingerprint, dtype=np.float32).tobytes()
+        ).hexdigest()
+
+    def set_has_match(self, fingerprint: np.ndarray, has_match: bool) -> None:
+        """Cache whether this fingerprint has an external match."""
+        self._match_cache[self._fingerprint_hash(fingerprint)] = has_match
+
+    def set_has_match_by_hash(self, fingerprint_hash: str, has_match: bool) -> None:
+        """Cache whether this fingerprint hash has an external match."""
+        self._match_cache[fingerprint_hash] = has_match
+
+    def get_has_match(self, fingerprint: np.ndarray) -> bool:
+        """Return cached match flag, defaulting to False."""
+        return self._match_cache.get(self._fingerprint_hash(fingerprint), False)
+
     def is_duplicate(self, fingerprint: np.ndarray) -> bool:
         """Check if the fingerprint is similar to the last detected song within cooldown period"""
         if self.last_fingerprint is None:
@@ -85,6 +105,7 @@ class AudioFingerprinter:
         """Reset fingerprint state"""
         self.last_fingerprint = None
         self.last_fingerprint_time = None
+        self._match_cache.clear()
 
 
 class AudioRecorder:
@@ -115,7 +136,12 @@ class MusicDetector:
         threshold: float = 0.000813,
         sample_duration: int = 10,
         save_dir: str = "./samples",
-        on_recording_complete: Optional[Callable[[str], None]] = None,
+        on_recording_complete: Optional[
+            Callable[
+                [str, str],
+                None,
+            ]
+        ] = None,
         fingerprint_cooldown: int = 30,
         similarity_threshold: float = 0.85,  # Add similarity threshold parameter
         audio_callback: Optional[Callable[[], Tuple[Optional[bytes], int]]] = None,
@@ -126,7 +152,7 @@ class MusicDetector:
     ) -> None:
         self.threshold: float = threshold
         self.sample_duration: int = sample_duration
-        self.on_recording_complete: Optional[Callable[[str], None]] = (
+        self.on_recording_complete: Optional[Callable[[str, str], None]] = (
             on_recording_complete
         )
         self.audio_callback: Optional[Callable[[], Tuple[Optional[bytes], int]]] = (
@@ -183,12 +209,16 @@ class MusicDetector:
 
         fingerprint = self.fingerprinter.create_fingerprint(combined, sr)
 
-        if not self.fingerprinter.is_duplicate(fingerprint):
+        if not self.fingerprinter.is_duplicate(
+            fingerprint
+        ) or not self.fingerprinter.get_has_match(fingerprint):
             print("New song detected!")
             filepath = self.recorder.save_sample(combined, sr)
 
             if self.on_recording_complete:
-                self.on_recording_complete(filepath)
+                self.on_recording_complete(
+                    filepath, self.fingerprinter._fingerprint_hash(fingerprint)
+                )
 
             self.fingerprinter.update(fingerprint)
         else:

@@ -47,7 +47,7 @@ async def update_now_playing(shazam_response: ShazamResponse, album_info: dict |
         )
 
 
-async def send_to_shazam(shazam: Shazam, file_path: str):
+async def send_to_shazam(shazam: Shazam, file_path: str, fingerprint_hash: str):
     try:
         out = await shazam.recognize(file_path)
         response = ShazamResponse(**out)
@@ -60,7 +60,9 @@ async def send_to_shazam(shazam: Shazam, file_path: str):
 
             print("Album info:")
             print(album)
+
             await update_now_playing(response, album)
+            detector.fingerprinter.set_has_match_by_hash(fingerprint_hash, True)
     except Exception as e:
         print("Error recognizing track:", e)
     finally:
@@ -79,15 +81,16 @@ async def set_is_music_detecting(is_detecting: bool):
 async def main():
     shazam = Shazam(endpoint_country="US")
 
-    def on_recording_complete(result: str) -> None:
-        asyncio.create_task(send_to_shazam(shazam, result))
+    def on_recording_complete(result: str, fingerprint_hash: str) -> None:
+        asyncio.create_task(send_to_shazam(shazam, result, fingerprint_hash))
 
     def on_is_recording_changed(is_recording: bool) -> None:
         asyncio.create_task(set_is_music_detecting(is_recording))
 
     mic = MicrophoneCapture(debug=False, chunk_size=1024, sample_rate=44100)
+    global detector
     detector = MusicDetector(
-        similarity_threshold=0.75,
+        similarity_threshold=0.90,
         on_recording_complete=on_recording_complete,
         microphone=mic,
         debug=False,
