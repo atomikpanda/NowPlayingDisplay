@@ -90,7 +90,7 @@ async def main():
     mic = MicrophoneCapture(debug=False, chunk_size=1024, sample_rate=44100)
     global detector
     detector = MusicDetector(
-        similarity_threshold=0.90,
+        similarity_threshold=0.80,
         on_recording_complete=on_recording_complete,
         microphone=mic,
         debug=False,
