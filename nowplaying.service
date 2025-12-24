@@ -1,0 +1,12 @@
+[Unit]
+Description=NowPlayingDisplay
+After=multi-user.target graphical.target networking.target
+
+[Service]
+Type=simple
+User=pi
+ExecStart=/home/pi/NowPlayingDisplay/run.sh
+Restart=always
+
+[Install]
+WantedBy=graphical.target
