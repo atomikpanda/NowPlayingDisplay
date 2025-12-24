@@ -49,7 +49,7 @@ class MicrophoneCapture:
             print(f"Available audio devices:\n{sd.query_devices()}")
 
         self.stream = sd.InputStream(
-            device="hw:CARD=Device,DEV=0",
+            device="hw:0,0",
             samplerate=self.sample_rate,
             channels=1,
             dtype=np.int16,
