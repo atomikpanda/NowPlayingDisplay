@@ -24,8 +24,9 @@ RECOGNITION_STATE_URL = os.getenv(
     "RECOGNITION_STATE_URL", "http://localhost:5432/recognition-state"
 )
 
-REFRESH_MS = int(os.getenv("REFRESH_MS", "1500"))
-STATE_REFRESH_MS = int(os.getenv("STATE_REFRESH_MS", "500"))
+# Poll slower by default on Pi Zero W (still configurable via env)
+REFRESH_MS = int(os.getenv("REFRESH_MS", "2500"))
+STATE_REFRESH_MS = int(os.getenv("STATE_REFRESH_MS", "1200"))
 
 # If you have a local placeholder image, set FALLBACK_ART_PATH.
 FALLBACK_ART_PATH = os.getenv(
@@ -39,8 +40,10 @@ HIDE_CURSOR = os.getenv("HIDE_CURSOR", "1") == "1"
 FIXED_WIDTH = os.getenv("WIDTH")
 FIXED_HEIGHT = os.getenv("HEIGHT")
 
-REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "0.6"))  # keep snappy on Zero 2
+REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "1.0"))
 
+# UI refresh cap (used only when there *are* changes / events)
+UI_FPS = int(os.getenv("UI_FPS", "8"))
 
 # ----------------------------- Data -----------------------------
 
@@ -172,23 +175,47 @@ class Poller:
         self.online = True
 
         self._art_surface: Optional[pygame.Surface] = None
-        self._art_key: str = ""  # art_url used for cache identity
+        self._art_key: str = ""
+
+        # Cache for already-cropped+scaled art (big CPU saver vs doing it every draw)
+        self._scaled_art: Optional[pygame.Surface] = None
+        self._scaled_art_key: Tuple[str, int, int] = ("", 0, 0)
 
         self._stop = threading.Event()
+        self._changed = threading.Event()
+        self._changed.set()  # force initial draw
+
+        # Reuse sessions (keep-alive) to reduce overhead
+        self._np_session = requests.Session()
+        self._st_session = requests.Session()
+        self._art_session = requests.Session()
 
     def stop(self):
         self._stop.set()
+        self._changed.set()
 
     def start(self):
         threading.Thread(target=self._poll_now_playing, daemon=True).start()
         threading.Thread(target=self._poll_state, daemon=True).start()
 
+    def mark_changed(self):
+        self._changed.set()
+
+    def wait_changed(self, timeout_s: float) -> bool:
+        return self._changed.wait(timeout_s)
+
+    def clear_changed(self):
+        self._changed.clear()
+
     def _poll_now_playing(self):
-        session = requests.Session()
+        prev_key = None
+        prev_online = None
+        prev_updated = None
+
         while not self._stop.is_set():
             t0 = time.time()
             try:
-                r = session.get(
+                r = self._np_session.get(
                     NOW_PLAYING_URL,
                     timeout=REQUEST_TIMEOUT,
                     headers={"Cache-Control": "no-store"},
@@ -203,26 +230,56 @@ class Poller:
                     album=safe_text(d.get("album", "")),
                 )
 
+                # Avoid “change every second”: show minutes, not seconds
+                updated = time.strftime("%-I:%M %p")
+
+                key = (np.art_url, np.track, np.artist, np.album)
+                online = True
+
+                changed = (
+                    (key != prev_key)
+                    or (online != prev_online)
+                    or (updated != prev_updated)
+                )
+
                 with self._lock:
                     self.now_playing = np
-                    self.online = True
-                    self.last_update_str = time.strftime("%-I:%M:%S %p")  # local time
+                    self.online = online
+                    self.last_update_str = updated
+                    if prev_key is None or (key[0] != prev_key[0]):
+                        # Art URL changed -> drop scaled art cache
+                        self._scaled_art = None
+                        self._scaled_art_key = ("", 0, 0)
+
+                if changed:
+                    self._changed.set()
+
+                prev_key, prev_online, prev_updated = key, online, updated
 
             except Exception:
+                online = False
+                updated = "offline"
+                changed = (online != prev_online) or (updated != prev_updated)
+
                 with self._lock:
-                    self.online = False
-                    self.last_update_str = "offline"
+                    self.online = online
+                    self.last_update_str = updated
+
+                if changed:
+                    self._changed.set()
+
+                prev_online, prev_updated = online, updated
 
             elapsed = (time.time() - t0) * 1000.0
             sleep_ms = max(0, REFRESH_MS - int(elapsed))
             self._stop.wait(sleep_ms / 1000.0)
 
     def _poll_state(self):
-        session = requests.Session()
+        prev_state = None
         while not self._stop.is_set():
             t0 = time.time()
             try:
-                r = session.get(
+                r = self._st_session.get(
                     RECOGNITION_STATE_URL,
                     timeout=REQUEST_TIMEOUT,
                     headers={"Cache-Control": "no-store"},
@@ -230,16 +287,21 @@ class Poller:
                 r.raise_for_status()
                 d = r.json()
                 st = str(d.get("state", "idle")).strip().lower()
-                # mimic your JS logic
                 if st not in ("listening", "idle"):
                     st = "idle"
 
-                with self._lock:
-                    self.rec_state = RecState(state=st)
+                if st != prev_state:
+                    with self._lock:
+                        self.rec_state = RecState(state=st)
+                    self._changed.set()
+                    prev_state = st
 
             except Exception:
-                with self._lock:
-                    self.rec_state = RecState(state="idle")
+                if prev_state != "idle":
+                    with self._lock:
+                        self.rec_state = RecState(state="idle")
+                    self._changed.set()
+                    prev_state = "idle"
 
             elapsed = (time.time() - t0) * 1000.0
             sleep_ms = max(0, STATE_REFRESH_MS - int(elapsed))
@@ -257,8 +319,6 @@ class Poller:
         Caches by art_url.
         """
         art_url = (art_url or "").strip()
-        if not art_url:
-            art_url = ""
 
         with self._lock:
             if art_url == self._art_key and self._art_surface is not None:
@@ -288,26 +348,53 @@ class Poller:
 
         elif art_url.startswith("http://") or art_url.startswith("https://"):
             try:
-                r = requests.get(
+                r = self._art_session.get(
                     art_url,
                     timeout=REQUEST_TIMEOUT,
                     headers={"Cache-Control": "no-store"},
                 )
                 r.raise_for_status()
-                # pygame can load from a file-like object via bytes + BytesIO
                 import io
 
                 bio = io.BytesIO(r.content)
+                # convert() is faster to blit; if you need alpha artwork, use convert_alpha()
                 surf = pygame.image.load(bio).convert()
             except Exception:
                 surf = None
 
-        # Cache
         with self._lock:
             self._art_key = art_url
             self._art_surface = surf
 
         return surf
+
+    def get_scaled_art(
+        self, art_url: str, target_w: int, target_h: int
+    ) -> Optional[pygame.Surface]:
+        """
+        Return cached album art already cropped+scaled to (target_w, target_h).
+        """
+        art_url = (art_url or "").strip()
+        cache_key = (art_url, int(target_w), int(target_h))
+
+        with self._lock:
+            if self._scaled_art is not None and cache_key == self._scaled_art_key:
+                return self._scaled_art
+
+        art = self.get_art_surface(art_url)
+        if not art:
+            return None
+
+        sw, sh = art.get_width(), art.get_height()
+        src = fit_cover(sw, sh, target_w, target_h)
+        cropped = art.subsurface(src)
+        scaled = pygame.transform.smoothscale(cropped, (target_w, target_h))
+
+        with self._lock:
+            self._scaled_art = scaled
+            self._scaled_art_key = cache_key
+
+        return scaled
 
 
 # ----------------------------- UI -----------------------------
@@ -315,21 +402,23 @@ class Poller:
 
 class NowPlayingUI:
     def __init__(self):
-        pygame.init()
         pygame.font.init()
 
         if HIDE_CURSOR:
             pygame.mouse.set_visible(False)
 
+        # Reduce event overhead
+        pygame.event.set_allowed([pygame.QUIT, pygame.KEYDOWN])
+
         if FIXED_WIDTH and FIXED_HEIGHT:
             self.w = int(FIXED_WIDTH)
             self.h = int(FIXED_HEIGHT)
-            flags = pygame.NOFRAME
+            flags = pygame.NOFRAME | pygame.HWSURFACE | pygame.DOUBLEBUF
             self.screen = pygame.display.set_mode((self.w, self.h), flags)
         else:
             info = pygame.display.Info()
             self.w, self.h = info.current_w, info.current_h
-            flags = pygame.FULLSCREEN
+            flags = pygame.FULLSCREEN | pygame.HWSURFACE | pygame.DOUBLEBUF
             self.screen = pygame.display.set_mode((self.w, self.h), flags)
 
         pygame.display.set_caption("Now Playing")
@@ -356,10 +445,32 @@ class NowPlayingUI:
         self.text = (232, 240, 251)
         self.muted = (138, 160, 184)
 
-        # Status colors (approx)
         self.state_colors = {
             "listening": (34, 197, 94),
             "idle": (100, 116, 139),
+        }
+
+        # Pre-render static overlays once (avoid per-frame gradient work + allocations)
+        left_w = self.w // 2
+        right_w = self.w - left_w
+
+        self._art_overlay = pygame.Surface((left_w, self.h), pygame.SRCALPHA)
+        draw_vertical_gradient(
+            self._art_overlay,
+            self._art_overlay.get_rect(),
+            (255, 255, 255, 22),
+            (0, 0, 0, 90),
+        )
+
+        self._meta_bg = pygame.Surface((right_w, self.h), pygame.SRCALPHA)
+        draw_vertical_gradient(
+            self._meta_bg, self._meta_bg.get_rect(), (0, 0, 0, 55), (0, 0, 0, 90)
+        )
+
+        # Cache constant label renders
+        self._label_cache = {
+            "ARTIST": self.font_label.render("ARTIST", True, (232, 240, 251, 205)),
+            "ALBUM": self.font_label.render("ALBUM", True, (232, 240, 251, 205)),
         }
 
     def _make_font(self, size: int, bold: bool) -> pygame.font.Font:
@@ -378,12 +489,16 @@ class NowPlayingUI:
                         if event.key in (pygame.K_ESCAPE, pygame.K_q):
                             raise SystemExit
                         if event.key == pygame.K_r:
-                            # "refresh" just forces a redraw; pollers run independently
-                            pass
+                            self.poller.mark_changed()
 
-                self.draw()
-                pygame.display.flip()
-                self.clock.tick(30)  # 30fps UI, network polling runs on threads
+                # Block a bit waiting for changes; don’t spin at full speed
+                changed = self.poller.wait_changed(timeout_s=1.0 / max(1, UI_FPS))
+                if changed:
+                    self.draw()
+                    pygame.display.flip()
+                    self.poller.clear_changed()
+
+                self.clock.tick(UI_FPS)
         finally:
             self.poller.stop()
             pygame.quit()
@@ -391,7 +506,6 @@ class NowPlayingUI:
     def draw(self):
         np, rs, updated_str, online = self.poller.get_snapshot()
 
-        # Layout: 2 columns
         left_w = self.w // 2
         right_w = self.w - left_w
 
@@ -401,18 +515,12 @@ class NowPlayingUI:
         # Background
         self.screen.fill(self.bg_base)
 
-        # --- Left: art cover fill
-        art_surf = self.poller.get_art_surface(np.art_url)
-        if art_surf:
-            sw, sh = art_surf.get_width(), art_surf.get_height()
-            src = fit_cover(sw, sh, art_rect.w, art_rect.h)
-            cropped = art_surf.subsurface(src)
-            scaled = pygame.transform.smoothscale(cropped, (art_rect.w, art_rect.h))
-            self.screen.blit(scaled, art_rect.topleft)
+        # --- Left: art (cached scaled)
+        art_scaled = self.poller.get_scaled_art(np.art_url, art_rect.w, art_rect.h)
+        if art_scaled:
+            self.screen.blit(art_scaled, art_rect.topleft)
         else:
-            # Simple fallback block
             pygame.draw.rect(self.screen, (16, 24, 38), art_rect)
-            # "No artwork" text
             t = self.font_value.render("No artwork", True, self.muted)
             self.screen.blit(
                 t,
@@ -422,19 +530,9 @@ class NowPlayingUI:
                 ),
             )
 
-        # Art gloss/vignette overlay (cheap-ish: just a translucent rect + subtle edge darkening)
-        overlay = pygame.Surface((art_rect.w, art_rect.h), pygame.SRCALPHA)
-        draw_vertical_gradient(
-            overlay, overlay.get_rect(), (255, 255, 255, 22), (0, 0, 0, 90)
-        )
-        self.screen.blit(overlay, art_rect.topleft)
-
-        # --- Right: meta pane gradient background
-        meta_bg = pygame.Surface((meta_rect.w, meta_rect.h), pygame.SRCALPHA)
-        draw_vertical_gradient(
-            meta_bg, meta_bg.get_rect(), (0, 0, 0, 55), (0, 0, 0, 90)
-        )
-        self.screen.blit(meta_bg, meta_rect.topleft)
+        # Pre-rendered overlays
+        self.screen.blit(self._art_overlay, art_rect.topleft)
+        self.screen.blit(self._meta_bg, meta_rect.topleft)
 
         # Divider line
         pygame.draw.line(
@@ -540,8 +638,11 @@ class NowPlayingUI:
     def _draw_row(
         self, label: str, value: str, x0: int, y: int, meta_w: int, pad: int
     ) -> int:
-        # label on left, value on right (single line with ellipsis)
-        label_s = self.font_label.render(label.upper(), True, (232, 240, 251, 205))
+        label_up = label.upper()
+        label_s = self._label_cache.get(label_up)
+        if label_s is None:
+            label_s = self.font_label.render(label_up, True, (232, 240, 251, 205))
+            self._label_cache[label_up] = label_s
         self.screen.blit(label_s, (x0, y))
 
         # value area starts after label + gap
@@ -558,7 +659,7 @@ class NowPlayingUI:
             v = (v + ell) if v else ell
 
         value_s = self.font_value.render(v, True, self.muted)
-        self.screen.blit(value_s, (vx, y - 2))  # slight baseline tweak
+        self.screen.blit(value_s, (vx, y - 2))
         return y + max(label_s.get_height(), value_s.get_height())
 
 
