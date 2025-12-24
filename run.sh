@@ -5,7 +5,7 @@ export XAUTHORITY=/home/pi/.Xauthority
 
 cd /home/pi/NowPlayingDisplay || exit 1
 /home/pi/.local/bin/uv run now_playing_web.py &
-sleep 10
 /home/pi/.local/bin/uv run main.py &
+/home/pi/.local/bin/uv run kiosk.py &
 
 wait
