@@ -24,6 +24,10 @@ class AudioFingerprinter:
 
     def create_fingerprint(self, y: np.ndarray, sr: int) -> np.ndarray:
         """Create a fingerprint from audio features (returns feature vector, not hash)"""
+        # Ensure clean input
+        y = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+        y = np.clip(y, -1.0, 1.0)
+
         # Extract chroma features (pitch class profiles)
         chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=512)
         # Extract spectral contrast
@@ -41,7 +45,13 @@ class AudioFingerprinter:
         )
 
         # Normalize the feature vector
-        features = features / (np.linalg.norm(features) + 1e-8)
+        norm = np.linalg.norm(features)
+        if norm > 1e-8:
+            features = features / norm
+        else:
+            # Handle zero-norm case
+            features = np.zeros_like(features)
+
         return features
 
     def _cosine_similarity(self, a: np.ndarray, b: np.ndarray) -> float:
@@ -206,6 +216,19 @@ class MusicDetector:
             print(f"Processing chunk: {len(chunk)} bytes, sr={sr}")
 
         y = np.frombuffer(chunk, dtype=np.float32)
+
+        # Sanitize audio data
+        # Remove NaN and Inf values
+        y = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+
+        # Clip to valid audio range
+        y = np.clip(y, -1.0, 1.0)
+
+        # Skip if audio is all zeros (silence)
+        if np.all(y == 0):
+            if self.debug:
+                print("Skipping all-zero chunk")
+            return
 
         if self.debug:
             print(
