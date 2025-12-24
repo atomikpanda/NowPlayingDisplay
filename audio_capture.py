@@ -13,7 +13,7 @@ class MicrophoneCapture:
     ) -> None:
         self.sample_rate: int = sample_rate
         self.chunk_size: int = chunk_size
-        self.audio_queue: queue.Queue = queue.Queue()
+        self.audio_queue: queue.Queue = queue.Queue(maxsize=10)
         self.stream: Optional[sd.InputStream] = None
         self.debug: bool = debug
         self.chunk_count: int = 0
