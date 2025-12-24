@@ -402,6 +402,7 @@ class Poller:
 
 class NowPlayingUI:
     def __init__(self):
+        pygame.init()
         pygame.font.init()
 
         if HIDE_CURSOR:
