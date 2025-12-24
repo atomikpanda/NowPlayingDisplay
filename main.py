@@ -62,7 +62,7 @@ async def send_to_shazam(shazam: Shazam, file_path: str, fingerprint_hash: str):
             print(album)
 
             await update_now_playing(response, album)
-            detector.fingerprinter.set_has_match_by_hash(fingerprint_hash, True)
+            detector.fingerprinter.set_has_match_by_id(fingerprint_hash, True)
     except Exception as e:
         print("Error recognizing track:", e)
     finally:
