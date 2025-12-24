@@ -9,6 +9,7 @@ dependencies = [
     "ffmpeg>=1.4",
     "flask>=3.1.2",
     "flask-pydantic>=0.13.2",
+    "gunicorn>=23.0.0",
     "httpx>=0.28.1",
     "librosa>=0.11.0",
     "musicbrainzngs>=0.7.1",
