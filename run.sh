@@ -8,7 +8,7 @@ cd /home/pi/NowPlayingDisplay || exit 1
 /home/pi/.local/bin/uv run main.py &
 chromium \
   --kiosk \
-  --disable-low-memory-warning \
+  --no-memcheck \
   --noerrdialogs \
   --disable-infobars \
   --disable-session-crashed-bubble \
