@@ -1,4 +1,5 @@
 import asyncio
+import os
 
 import httpx
 from dotenv import load_dotenv
@@ -63,7 +64,7 @@ async def send_to_shazam(shazam: Shazam, file_path: str):
     except Exception as e:
         print("Error recognizing track:", e)
     finally:
-        pass
+        os.remove(file_path)
 
 
 async def set_is_music_detecting(is_detecting: bool):
