@@ -45,7 +45,7 @@ class MicrophoneCapture:
         self.stream = sd.InputStream(
             samplerate=self.sample_rate,
             channels=1,
-            dtype=np.float32,
+            dtype=np.int16,
             blocksize=self.chunk_size,
             callback=self._audio_callback,
         )
