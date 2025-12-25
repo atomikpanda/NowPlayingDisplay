@@ -198,6 +198,8 @@ class MusicDetector:
         self.audio_callback: Optional[Callable[[], Tuple[Optional[bytes], int]]] = (
             audio_callback
         )
+
+        self._callback_accepts_fingerprint: Optional[bool] = None
         self.microphone: Optional["MicrophoneCapture"] = microphone
         self.debug: bool = debug
         self.silence_tolerance: float = silence_tolerance
