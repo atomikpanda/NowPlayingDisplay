@@ -178,7 +178,7 @@ class MusicDetector:
 
     def __init__(
         self,
-        threshold: float = 0.000813,
+        threshold: float = 0.0025,
         sample_duration: int = 10,
         save_dir: str = "./samples",
         on_recording_complete: Optional[Callable[..., None]] = None,
